@@ -1,0 +1,68 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Products: Allow reads by anyone, writes only by admin (not implemented yet)
+    match /products/{productId} {
+      allow read: if true;
+      allow write: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      
+      // Allow reviews hook to update review stats
+      allow update: if request.auth != null && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || (request.resource.data.keys().hasOnly(['averageRating', 'reviewCount'])));
+
+      // Reviews Subcollection
+      match /reviews/{userId} {
+        allow read: if true;
+
+        // Create: only authenticated users, doc ID must be user's UID
+        allow create: if request.auth != null 
+                      && request.auth.uid == userId
+                      && request.resource.data.userId == request.auth.uid;
+        
+        // Update:
+        // - users can update their own rating/comment/timestamps.
+        // - any authenticated user can update the 'likes' array.
+        allow update: if request.auth != null && (
+                      // Owner can update their review content
+                      (request.auth.uid == resource.data.userId && request.resource.data.keys().hasAny(['rating', 'comment', 'updatedAt', 'authorName', 'productName'])) ||
+                      // Any authenticated user can like/unlike
+                      (request.resource.data.keys().hasOnly(['likes']))
+                    );
+
+        // Delete: only the user who wrote it or an admin
+        allow delete: if request.auth != null && (request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      
+        // Replies Subcollection
+        match /replies/{replyId} {
+            allow read: if true;
+            
+            allow create: if request.auth != null
+                          && request.resource.data.userId == request.auth.uid;
+            
+            allow delete: if request.auth != null && (request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+            
+            // Generally, replies are not editable.
+            allow update: if false;
+        }
+      }
+    }
+
+    // Users: Allow users to read/write their own data
+    match /users/{userId} {
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null;
+    }
+
+    // Orders: Allow users to read their own orders. Creation is handled by backend logic.
+    match /orders/{orderId} {
+        allow read, update: if request.auth != null && request.auth.uid == get(/databases/$(database)/documents/orders/$(orderId)).data.userId;
+        // Do not allow client-side creation or deletion of orders.
+        allow create, delete: if false;
+    }
+    
+    match /{path=**}/reviews/{reviewId} {
+        allow read: if true;
+    }
+  }
+}
